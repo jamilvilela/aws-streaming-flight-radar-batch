@@ -1,0 +1,45 @@
+# Dockerfile para AWS Batch - Flight Radar Data Loader
+# Imagem baseada em Python 3.11 slim para tamanho reduzido
+
+FROM python:3.11-slim
+
+# Metadados
+LABEL maintainer="Flight Radar Team"
+LABEL description="Container para execução de jobs de carga de dados no AWS Batch"
+
+# Variáveis de ambiente
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Instala dependências do sistema
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Cria usuário não-root
+RUN groupadd -r batchuser && useradd -r -g batchuser batchuser
+
+# Define diretório de trabalho
+WORKDIR /app
+
+# Copia requirements primeiro (para cache de layers)
+COPY requirements.txt .
+
+# Instala dependências Python
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copia código da aplicação (conteúdo de app/ vai direto para /app/)
+COPY app/ .
+
+# Ajusta permissões
+RUN chown -R batchuser:batchuser /app
+
+# Muda para usuário não-root
+USER batchuser
+
+# Entry point
+ENTRYPOINT ["python", "entrypoint.py"]
