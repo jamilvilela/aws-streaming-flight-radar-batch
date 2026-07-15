@@ -67,9 +67,18 @@ def main():
             os.environ["DB_USER"] = secret.get("username", secret.get("user", os.getenv("DB_USER", "")))
             os.environ["DB_PASSWORD"] = secret.get("password", os.getenv("DB_PASSWORD", ""))
             logger.info("Variáveis de conexão DB configuradas a partir do Secrets Manager")
+        else:
+            logger.warning(
+                "Secrets Manager falhou. Usando variáveis DB_HOST/DB_USER/DB_PASSWORD "
+                "do ambiente (containerOverrides ou .env)."
+            )
+
+    # Diagnóstico: exibe qual host será usado para conexão
+    db_host = os.getenv("DB_HOST", "localhost")
+    logger.info("DB_HOST configurado: %s", db_host)
 
     job_type = os.getenv("JOB_TYPE", "historical").lower()
-    logger.info(f"Iniciando job tipo: {job_type}")
+    logger.info("Iniciando job tipo: %s", job_type)
 
     # Caminho relativo ao WORKDIR /app (definido no Dockerfile)
     base_cmd = [
@@ -88,7 +97,9 @@ def main():
             "--target-size-gb", target_size_gb
         ]
         if years_list:
-            cmd.extend(["--years-list", years_list])
+            # Aceita formato JSON array "[2025,2026]" ou espaço-separado "2025 2026"
+            years_parsed = years_list.strip().strip("[]").replace(",", " ")
+            cmd.extend(["--years-list", *years_parsed.split()])
 
     elif job_type == "stream":
         interval = os.getenv("INTERVAL", "1")

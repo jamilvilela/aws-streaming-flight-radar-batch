@@ -836,6 +836,28 @@ cells:
     languageId: sql
     value: ""
     metadata: {}
+  - kind: 2
+    languageId: sql
+    value: |-
+      -- =============================================================================
+      -- 8.  CONSULTAS DE CONTAGEM POR PERÍODO
+      -- =============================================================================
+
+      -- 8.1  Contagem de posições (aircraft_positions) por ano e mês
+      --
+      --      Utiliza EXTRACT para agrupar por ano/mês do recorded_at.
+      --      A tabela é particionada por mês (recorded_at), então esta consulta
+      --      faz pruning natural das partições.
+      SELECT
+          EXTRACT(YEAR  FROM recorded_at)::INT AS ano,
+      --    EXTRACT(MONTH FROM recorded_at)::INT AS mes,
+          COUNT(*)                             AS total_posicoes,
+          COUNT(DISTINCT aircraft_icao24)      AS aeronaves_distintas,
+          COUNT(DISTINCT flight_id)            AS voos_distintos
+      FROM flight_radar.aircraft_positions
+      GROUP BY ano --, mes
+      ORDER BY ano DESC --, mes DESC;
+    metadata: {}
 metadata:
   conn:
     id: i5VUGIHs1VWo2RLBc6LTh

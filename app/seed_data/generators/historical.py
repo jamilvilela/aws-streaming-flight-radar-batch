@@ -262,15 +262,42 @@ class HistoricalGenerator(BaseGenerator):
             logger.info("Ano %d não tem janela válida para geração.", year_start.year)
             return 0, 0
 
-        # 3. Gera TUDO em memória (zero round trips)
+        # 3. Gera e insere em lotes (FLIGHT_BATCH_SIZE voos por vez)
+        #    para evitar OOM — não acumula tudo em memória.
+        FLIGHT_BATCH_SIZE = 10000  # voos por lote
         flight_rows: list[dict] = []
         position_buffer: list = []
+        flights_created = 0
+        positions_created = 0
+
+        def _flush_batch() -> None:
+            """Insere lote atual e limpa buffers."""
+            nonlocal flights_created, positions_created
+            if not flight_rows:
+                return
+            # Insere voos
+            self.repo.insert_flights_batch(flight_rows)
+            flights_created += len(flight_rows)
+
+            # Insere posições em sub-chunks (COPY)
+            for start in range(0, len(position_buffer), 10000):
+                chunk = position_buffer[start:start + 10000]
+                positions_created += self.repo.insert_positions_copy(chunk)
+
+            logger.info(
+                "  Lote: +%d voos, +%d posições (acumulado: %d voos, %d posições)",
+                len(flight_rows), len(position_buffer),
+                flights_created, positions_created,
+            )
+            flight_rows.clear()
+            position_buffer.clear()
+
+        total_seconds = (max_ref_time - min_ref_time).total_seconds()
+        if total_seconds <= 0:
+            return 0, 0
 
         for i in range(num_flights):
             # Distribui uniformemente entre min_ref_time e max_ref_time
-            total_seconds = (max_ref_time - min_ref_time).total_seconds()
-            if total_seconds <= 0:
-                break
             offset_seconds = random.uniform(0, total_seconds)
             ref_time = min_ref_time + timedelta(seconds=offset_seconds)
 
@@ -302,21 +329,12 @@ class HistoricalGenerator(BaseGenerator):
                         )
                         position_buffer.extend(pos_list)
 
-        # 3. Batch INSERT de voos (1 round trip, com ON CONFLICT)
-        self.repo.insert_flights_batch(flight_rows)
-        flights_created = len(flight_rows)
+            # Despeja lote a cada FLIGHT_BATCH_SIZE voos
+            if len(flight_rows) >= FLIGHT_BATCH_SIZE:
+                _flush_batch()
 
-        # 4. COPY de posições em chunks (para não estourar memória do lado do DB)
-        positions_created = 0
-        CHUNK = 10000
-        for start in range(0, len(position_buffer), CHUNK):
-            chunk = position_buffer[start:start + CHUNK]
-            positions_created += self.repo.insert_positions_copy(chunk)
-            logger.debug(
-                "  Posições: %d/%d (%.1f%%)",
-                positions_created, len(position_buffer),
-                100.0 * positions_created / len(position_buffer),
-            )
+        # Despeja lote residual
+        _flush_batch()
 
         return flights_created, positions_created
 

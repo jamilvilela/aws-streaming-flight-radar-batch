@@ -25,19 +25,19 @@ db_password = ""
 # AWS Batch Configuration
 # ═════════════════════════════════════════════════════════════════════════════
 batch_config = {
-  enabled = true
-  ecr_image_tag = "latest"
+  enabled             = true
+  ecr_image_tag       = "latest"
   efs_file_system_id  = ""
   efs_file_system_arn = ""
 
-  compute_instance_types      = ["m6i.large", "c6a.large", "m5.large"]
+  compute_instance_types      = ["m6i.large", "m6i.xlarge", "m6i.2xlarge", "c6a.large", "c6a.xlarge", "c6a.2xlarge", "m5.large", "m5.xlarge", "m5.2xlarge"]
   compute_min_vcpus           = 0
-  compute_max_vcpus           = 16
+  compute_max_vcpus           = 64
   compute_desired_vcpus       = 0
   compute_spot_bid_percentage = 100
 
-  job_historical_vcpus  = 2
-  job_historical_memory = 4096
+  job_historical_vcpus  = 4
+  job_historical_memory = 16384
   job_stream_vcpus      = 1
   job_stream_memory     = 2048
   job_load_ref_vcpus    = 1

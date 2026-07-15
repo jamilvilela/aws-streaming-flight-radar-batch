@@ -62,6 +62,17 @@ resource "aws_iam_role_policy" "batch_service_ecs" {
   })
 }
 
+resource "time_sleep" "batch_service_role_propagation" {
+  count = var.batch_config.enabled ? 1 : 0
+
+  depends_on = [
+    aws_iam_role_policy_attachment.batch_service_role_policy,
+    aws_iam_role_policy.batch_service_ecs
+  ]
+
+  create_duration = "30s"
+}
+
 # -------------------------------------------------------------------------------
 # Spot Fleet Role
 # -------------------------------------------------------------------------------

@@ -19,6 +19,12 @@ resource "aws_batch_compute_environment" "this" {
   state        = "ENABLED"
   service_role = aws_iam_role.batch_service_role[0].arn
 
+  depends_on = [
+    aws_iam_role_policy_attachment.batch_service_role_policy,
+    aws_iam_role_policy.batch_service_ecs,
+    time_sleep.batch_service_role_propagation
+  ]
+
   compute_resources {
     type                = "EC2"
     instance_role       = aws_iam_instance_profile.batch_instance_profile[0].arn
@@ -45,7 +51,7 @@ resource "aws_batch_job_queue" "this" {
   state    = "ENABLED"
   priority = 1
   compute_environment_order {
-    order = 1
+    order               = 1
     compute_environment = aws_batch_compute_environment.this[0].arn
   }
   tags = var.tags

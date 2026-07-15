@@ -64,11 +64,14 @@ fetch_db_credentials_from_secrets_manager() {
   require_cmd jq
 
   local secret_json
-  secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_id" --query 'SecretString' --output text 2>/dev/null)
+  if ! secret_json=$(aws secretsmanager get-secret-value --secret-id "$secret_id" --query 'SecretString' --output text 2>/dev/null); then
+    warn "Falha ao obter segredo '$secret_id' do Secrets Manager; usando os valores do .env como fallback"
+    return 1
+  fi
+
   if [ -z "$secret_json" ] || [ "$secret_json" = "null" ]; then
-    fail "Falha ao obter segredo '$secret_id' do Secrets Manager"
-    echo "   Verifique se o segredo existe e se você tem permissão secretsmanager:GetSecretValue"
-    exit 1
+    warn "Segredo '$secret_id' vazio ou indisponível; usando os valores do .env como fallback"
+    return 1
   fi
 
   # Parse JSON and export as TF_VAR_*
@@ -80,9 +83,8 @@ fetch_db_credentials_from_secrets_manager() {
 
   # Validate required fields
   if [ -z "$TF_VAR_db_host" ] || [ -z "$TF_VAR_db_user" ] || [ -z "$TF_VAR_db_password" ]; then
-    fail "Segredo '$secret_id' não contém campos obrigatórios (host, username, password)"
-    echo "   JSON recebido: $secret_json"
-    exit 1
+    warn "Segredo '$secret_id' não contém campos obrigatórios (host, username, password); usando os valores do .env como fallback"
+    return 1
   fi
 
   ok "Credenciais obtidas do Secrets Manager"
@@ -91,6 +93,7 @@ fetch_db_credentials_from_secrets_manager() {
   echo "   DB_NAME: $TF_VAR_db_name"
   echo "   DB_USER: $TF_VAR_db_user"
   echo "   DB_PASSWORD: ********"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -112,9 +115,23 @@ if [ -n "$AWS_REGION" ]; then
   export TF_VAR_aws_region="$AWS_REGION"
 fi
 
-# Se DB_SECRET_NAME estiver definido, busca credenciais do Secrets Manager
+# Se DB_SECRET_NAME estiver definido, tenta buscar credenciais do Secrets Manager
+# e usa o .env como fallback se o segredo não estiver disponível.
 if [ -n "$DB_SECRET_NAME" ]; then
-  fetch_db_credentials_from_secrets_manager "$DB_SECRET_NAME"
+  if fetch_db_credentials_from_secrets_manager "$DB_SECRET_NAME"; then
+    :
+  elif [ -n "$DB_HOST" ]; then
+    export TF_VAR_db_host="$DB_HOST"
+    export TF_VAR_db_port="${DB_PORT:-5432}"
+    export TF_VAR_db_name="${DB_NAME:-flightradar}"
+    export TF_VAR_db_user="$DB_USER"
+    export TF_VAR_db_password="$DB_PASSWORD"
+    ok "Credenciais de banco carregadas do .env (fallback após falha do Secrets Manager)"
+  else
+    warn "Nenhuma credencial de banco encontrada (DB_HOST ou DB_SECRET_NAME)"
+    echo "   Defina DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD no .env"
+    echo "   OU defina DB_SECRET_NAME para buscar do Secrets Manager"
+  fi
 elif [ -n "$DB_HOST" ]; then
   export TF_VAR_db_host="$DB_HOST"
   export TF_VAR_db_port="${DB_PORT:-5432}"
@@ -248,43 +265,47 @@ if [ "$SKIP_APPLY" -eq 1 ] || [ "$SKIP_DOCKER" -eq 1 ]; then
 else
   section "STEP 9 — Build & Push Docker image"
 
-  require_cmd docker
+  if ! command -v docker >/dev/null 2>&1; then
+    warn "Docker CLI não encontrado; pulando build/push. Instale o Docker para publicar a imagem."
+  elif ! docker info >/dev/null 2>&1; then
+    warn "Docker daemon indisponível; pulando build/push. Inicie o daemon do Docker para publicar a imagem."
+  else
+    ECR_REPO_URL=$(terraform output -raw ecr_repository_url 2>/dev/null)
+    ECR_REPO_NAME=$(terraform output -raw ecr_repository_name 2>/dev/null)
 
-  ECR_REPO_URL=$(terraform output -raw ecr_repository_url 2>/dev/null)
-  ECR_REPO_NAME=$(terraform output -raw ecr_repository_name 2>/dev/null)
+    if [ -z "$ECR_REPO_URL" ]; then
+      fail "URL do ECR não encontrada no terraform output"
+      exit 4
+    fi
 
-  if [ -z "$ECR_REPO_URL" ]; then
-    fail "URL do ECR não encontrada no terraform output"
-    exit 4
+    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null)
+    REGION="${AWS_REGION:-us-east-1}"
+
+    # Login no ECR
+    ok "Fazendo login no ECR..."
+    aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
+    [ $? -ne 0 ] && { fail "Login no ECR falhou"; exit 4; }
+
+    IMAGE_TAG="${BATCH_IMAGE_TAG:-latest}"
+    IMAGE_URI="${ECR_REPO_URL}:${IMAGE_TAG}"
+
+    # Build da imagem
+    ok "Build da imagem Docker..."
+    cd ..
+    docker build -f docker/Dockerfile.batch -t "$ECR_REPO_NAME:$IMAGE_TAG" .
+    [ $? -ne 0 ] && { fail "Build da imagem falhou"; exit 4; }
+
+    # Tag para o ECR
+    docker tag "$ECR_REPO_NAME:$IMAGE_TAG" "$IMAGE_URI"
+
+    # Push para o ECR
+    ok "Push da imagem para o ECR..."
+    docker push "$IMAGE_URI"
+    [ $? -ne 0 ] && { fail "Push da imagem falhou"; exit 4; }
+
+    ok "Imagem enviada: ${GREEN}${IMAGE_URI}${NC}"
+    cd infra || exit 1
   fi
-
-  ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null)
-  REGION="${AWS_REGION:-us-east-1}"
-
-  # Login no ECR
-  ok "Fazendo login no ECR..."
-  aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
-  [ $? -ne 0 ] && { fail "Login no ECR falhou"; exit 4; }
-
-  IMAGE_TAG="${BATCH_IMAGE_TAG:-latest}"
-  IMAGE_URI="${ECR_REPO_URL}:${IMAGE_TAG}"
-
-  # Build da imagem
-  ok "Build da imagem Docker..."
-  cd ..
-  docker build -f docker/Dockerfile.batch -t "$ECR_REPO_NAME:$IMAGE_TAG" .
-  [ $? -ne 0 ] && { fail "Build da imagem falhou"; exit 4; }
-
-  # Tag para o ECR
-  docker tag "$ECR_REPO_NAME:$IMAGE_TAG" "$IMAGE_URI"
-
-  # Push para o ECR
-  ok "Push da imagem para o ECR..."
-  docker push "$IMAGE_URI"
-  [ $? -ne 0 ] && { fail "Push da imagem falhou"; exit 4; }
-
-  ok "Imagem enviada: ${GREEN}${IMAGE_URI}${NC}"
-  cd infra || exit 1
 fi
 
 # ---------------------------------------------------------------------------

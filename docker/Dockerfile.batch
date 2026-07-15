@@ -35,6 +35,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copia código da aplicação (conteúdo de app/ vai direto para /app/)
 COPY app/ .
 
+# Copia .env com credenciais do banco (carregado via config.py → load_dotenv)
+COPY .env .env
+
 # Ajusta permissões
 RUN chown -R batchuser:batchuser /app
 
