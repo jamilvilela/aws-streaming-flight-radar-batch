@@ -834,10 +834,6 @@ cells:
     metadata: {}
   - kind: 2
     languageId: sql
-    value: ""
-    metadata: {}
-  - kind: 2
-    languageId: sql
     value: |-
       -- =============================================================================
       -- 8.  CONSULTAS DE CONTAGEM POR PERÍODO
@@ -850,13 +846,14 @@ cells:
       --      faz pruning natural das partições.
       SELECT
           EXTRACT(YEAR  FROM recorded_at)::INT AS ano,
-      --    EXTRACT(MONTH FROM recorded_at)::INT AS mes,
+          EXTRACT(MONTH FROM recorded_at)::INT AS mes,
           COUNT(*)                             AS total_posicoes,
           COUNT(DISTINCT aircraft_icao24)      AS aeronaves_distintas,
           COUNT(DISTINCT flight_id)            AS voos_distintos
       FROM flight_radar.aircraft_positions
-      GROUP BY ano --, mes
-      ORDER BY ano DESC --, mes DESC;
+      where recorded_at > now() - interval '7 months'
+      GROUP BY ano, mes
+      ORDER BY ano DESC, mes DESC;
     metadata: {}
 metadata:
   conn:

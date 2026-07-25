@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Iterator, Optional
+from typing import Any, Generator, Optional
 
 import psycopg2
 import psycopg2.extras
@@ -51,7 +51,7 @@ class DatabaseRepository:
             self.conn = None
 
     @contextmanager
-    def transaction(self) -> Iterator[psycopg2.extras.RealDictCursor]:
+    def transaction(self) -> Generator[psycopg2.extras.RealDictCursor, None, None]:
         """Context manager para transação com commit/rollback."""
         if self.conn is None:
             raise RuntimeError("Repositório não conectado. Chame .connect() primeiro.")
