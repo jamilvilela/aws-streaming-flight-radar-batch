@@ -30,7 +30,9 @@ WORKDIR /app
 COPY requirements.txt .
 
 # Instala dependências Python
-RUN pip install --no-cache-dir -r requirements.txt
+# --retries/--timeout: rede instável pode causar ReadTimeoutError no download
+# de wheels grandes (ex.: pydantic_core, numpy, pandas)
+RUN pip install --no-cache-dir --retries 10 --timeout 120 -r requirements.txt
 
 # Copia código da aplicação (conteúdo de app/ vai direto para /app/)
 COPY app/ .
