@@ -2,8 +2,8 @@
 # AWS Batch - Compute Environment, Queue e Job Definitions
 # =============================================================================
 
-variable "db_secret_arn" {
-  description = "ARN do segredo no Secrets Manager com credenciais do banco (opcional)"
+variable "db_secret_name" {
+  description = "Nome do segredo no Secrets Manager com credenciais do banco (opcional)"
   type        = string
   default     = ""
 }
@@ -79,6 +79,7 @@ resource "aws_batch_job_definition" "historical" {
       { name = "DB_NAME", value = var.db_name },
       { name = "DB_USER", value = var.db_user },
       { name = "DB_PASSWORD", value = var.db_password },
+      { name = "DB_SECRET_NAME", value = var.db_secret_name },
       { name = "AWS_DEFAULT_REGION", value = var.aws_region },
       { name = "PYTHONUNBUFFERED", value = "1" }
     ]
@@ -122,6 +123,7 @@ resource "aws_batch_job_definition" "stream" {
       { name = "DB_NAME", value = var.db_name },
       { name = "DB_USER", value = var.db_user },
       { name = "DB_PASSWORD", value = var.db_password },
+      { name = "DB_SECRET_NAME", value = var.db_secret_name },
       { name = "AWS_DEFAULT_REGION", value = var.aws_region },
       { name = "PYTHONUNBUFFERED", value = "1" }
     ]
@@ -165,6 +167,7 @@ resource "aws_batch_job_definition" "load_reference" {
       { name = "DB_NAME", value = var.db_name },
       { name = "DB_USER", value = var.db_user },
       { name = "DB_PASSWORD", value = var.db_password },
+      { name = "DB_SECRET_NAME", value = var.db_secret_name },
       { name = "AWS_DEFAULT_REGION", value = var.aws_region },
       { name = "PYTHONUNBUFFERED", value = "1" }
     ]

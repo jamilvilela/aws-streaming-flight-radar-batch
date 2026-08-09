@@ -25,8 +25,9 @@ logging.basicConfig(
 logger = logging.getLogger("batch-entrypoint")
 
 
-def fetch_db_credentials_from_secrets_manager(secret_arn: str) -> dict:
-    """Busca credenciais do banco no AWS Secrets Manager."""
+def fetch_db_credentials_from_secrets_manager(secret_id: str) -> dict:
+    """Busca credenciais do banco no AWS Secrets Manager.
+    Aceita o nome ou o ARN do segredo como SecretId."""
     try:
         import boto3
         from botocore.exceptions import ClientError
@@ -34,10 +35,10 @@ def fetch_db_credentials_from_secrets_manager(secret_arn: str) -> dict:
         logger.error("boto3 não instalado. Não é possível buscar segredo do Secrets Manager.")
         return {}
 
-    logger.info(f"Buscando credenciais do banco no Secrets Manager: {secret_arn}")
+    logger.info(f"Buscando credenciais do banco no Secrets Manager: {secret_id}")
     client = boto3.client("secretsmanager")
     try:
-        response = client.get_secret_value(SecretId=secret_arn)
+        response = client.get_secret_value(SecretId=secret_id)
         secret_string = response.get("SecretString", "{}")
         secret = json.loads(secret_string)
         logger.info("Credenciais obtidas com sucesso do Secrets Manager")
@@ -55,10 +56,10 @@ def run_command(cmd: list[str], env: dict | None = None) -> int:
 
 
 def main():
-    # Se DB_SECRET_ARN estiver definido, busca credenciais no Secrets Manager
-    db_secret_arn = os.getenv("DB_SECRET_ARN")
-    if db_secret_arn:
-        secret = fetch_db_credentials_from_secrets_manager(db_secret_arn)
+    # Se DB_SECRET_NAME estiver definido, busca credenciais no Secrets Manager
+    db_secret_name = os.getenv("DB_SECRET_NAME")
+    if db_secret_name:
+        secret = fetch_db_credentials_from_secrets_manager(db_secret_name)
         if secret:
             # Define variáveis de ambiente esperadas pelo seed_data/cli.py
             os.environ["DB_HOST"] = secret.get("host", os.getenv("DB_HOST", ""))

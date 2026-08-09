@@ -37,8 +37,9 @@ RUN pip install --no-cache-dir --retries 10 --timeout 120 -r requirements.txt
 # Copia código da aplicação (conteúdo de app/ vai direto para /app/)
 COPY app/ .
 
-# Copia .env com credenciais do banco (carregado via config.py → load_dotenv)
-COPY .env .env
+# ATENÇÃO: NÃO copiar .env para a imagem. As credenciais do banco são injetadas
+# em runtime pelo AWS Batch (environment no batch.tf) ou via Secrets Manager.
+# Copiar .env embute senhas no image layer e as expõe a quem tiver acesso ao ECR.
 
 # Ajusta permissões
 RUN chown -R batchuser:batchuser /app

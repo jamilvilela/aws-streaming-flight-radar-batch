@@ -115,6 +115,11 @@ if [ -n "$AWS_REGION" ]; then
   export TF_VAR_aws_region="$AWS_REGION"
 fi
 
+# Nome do segredo no Secrets Manager (opcional) — injetado como DB_SECRET_NAME no Batch
+if [ -n "$DB_SECRET_NAME" ]; then
+  export TF_VAR_db_secret_name="$DB_SECRET_NAME"
+fi
+
 # Se DB_SECRET_NAME estiver definido, tenta buscar credenciais do Secrets Manager
 # e usa o .env como fallback se o segredo não estiver disponível.
 if [ -n "$DB_SECRET_NAME" ]; then
@@ -143,6 +148,30 @@ else
   warn "Nenhuma credencial de banco encontrada (DB_HOST ou DB_SECRET_NAME)"
   echo "   Defina DB_HOST/DB_PORT/DB_NAME/DB_USER/DB_PASSWORD no .env"
   echo "   OU defina DB_SECRET_NAME para buscar do Secrets Manager"
+fi
+
+# ---------------------------------------------------------------------------
+# Temp tfvars com valores reais de DB
+# ---------------------------------------------------------------------------
+# IMPORTANTE: o Terraform dá precedência a `-var-file` sobre variáveis de
+# ambiente (TF_VAR_*). Como tfvars/terraform.tfvars contém placeholders vazios,
+# eles sobrescreveriam os valores reais exportados acima. Para garantir que os
+# valores reais cheguem ao plan/apply, geramos um arquivo temporário com os
+# valores reais e o passamos como segundo -var-file (maior precedência).
+DB_TEMP_TFVARS=""
+if [ -n "$TF_VAR_db_host" ] || [ -n "$TF_VAR_db_user" ] || [ -n "$TF_VAR_db_password" ] || [ -n "$TF_VAR_db_secret_name" ]; then
+  # Sufixo .json é obrigatório para o Terraform interpretar o arquivo como JSON
+  DB_TEMP_TFVARS="$(mktemp).json"
+  jq -n \
+    --arg host "${TF_VAR_db_host:-}" \
+    --arg port "${TF_VAR_db_port:-5432}" \
+    --arg name "${TF_VAR_db_name:-flightradar}" \
+    --arg user "${TF_VAR_db_user:-}" \
+    --arg pass "${TF_VAR_db_password:-}" \
+    --arg secret "${TF_VAR_db_secret_name:-}" \
+    '{db_host: $host, db_port: $port, db_name: $name, db_user: $user, db_password: $pass, db_secret_name: $secret}' \
+    > "$DB_TEMP_TFVARS"
+  ok "Valores reais de DB preparados para o Terraform (precedência sobre tfvars)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -216,7 +245,11 @@ terraform validate
 ok "validate concluído"
 
 section "STEP 6 — terraform plan"
-terraform plan -var-file="$TFVARS_FILE" -out=tfplan
+if [ -n "$DB_TEMP_TFVARS" ]; then
+  terraform plan -var-file="$TFVARS_FILE" -var-file="$DB_TEMP_TFVARS" -out=tfplan
+else
+  terraform plan -var-file="$TFVARS_FILE" -out=tfplan
+fi
 [ $? -ne 0 ] && { fail "terraform plan falhou"; exit 2; }
 ok "plan concluido (salvo em tfplan)"
 
@@ -224,10 +257,18 @@ if [ "$SKIP_APPLY" -eq 1 ]; then
   warn "--skip-apply informado; apply nao sera executado."
 else
   section "STEP 7 — terraform apply"
-  terraform apply -var-file="$TFVARS_FILE" -auto-approve tfplan
+  if [ -n "$DB_TEMP_TFVARS" ]; then
+    terraform apply -var-file="$TFVARS_FILE" -var-file="$DB_TEMP_TFVARS" -auto-approve tfplan
+  else
+    terraform apply -var-file="$TFVARS_FILE" -auto-approve tfplan
+  fi
   [ $? -ne 0 ] && { fail "terraform apply falhou"; exit 2; }
   ok "apply concluido"
   rm -f tfplan
+  if [ -n "$DB_TEMP_TFVARS" ]; then
+    rm -f "$DB_TEMP_TFVARS"
+    ok "Arquivo temporário de variáveis removido"
+  fi
 fi
 
 # ---------------------------------------------------------------------------

@@ -1,3 +1,11 @@
+# =============================================================================
+# terraform.tfvars.example — Template versionável
+# Copie para terraform.tfvars e preencha com seus valores reais.
+# NUNCA commite o terraform.tfvars real (está no .gitignore).
+# O setup-env.sh sobrescreve db_host/db_port/db_name/db_user/db_password
+# a partir do .env ou do AWS Secrets Manager.
+# =============================================================================
+
 aws_region   = "us-east-1"
 project_name = "flight-radar-stream"
 environment  = "production"
@@ -20,6 +28,8 @@ db_port     = "5432"
 db_name     = "flightradar"
 db_user     = ""
 db_password = ""
+# Nome do segredo no Secrets Manager (opcional) — injetado como DB_SECRET_NAME no Batch
+db_secret_name = ""
 
 # ═════════════════════════════════════════════════════════════════════════════
 # AWS Batch Configuration
@@ -45,4 +55,3 @@ batch_config = {
 
   log_retention_days = 30
 }
-
