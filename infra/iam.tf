@@ -194,7 +194,7 @@ resource "aws_iam_role_policy" "batch_job_policy" {
             "secretsmanager:GetSecretValue",
             "secretsmanager:DescribeSecret"
           ]
-          Resource = "*"
+          Resource = local.secrets_enabled ? local.secret_arn : "*"
         },
         {
           Effect = "Allow"

@@ -110,6 +110,18 @@ fi
 source .env
 ok "Variáveis de .env carregadas"
 
+REGION="${AWS_REGION:-us-east-1}"
+
+# Rede (opcional): override da VPC/subnets descobertas automaticamente
+if [ -n "$VPC_ID" ]; then
+  export TF_VAR_vpc_id="$VPC_ID"
+  ok "VPC_ID do .env → TF_VAR_vpc_id=$VPC_ID"
+fi
+if [ -n "$SUBNET_IDS" ]; then
+  export TF_VAR_subnet_ids="$SUBNET_IDS"
+  ok "SUBNET_IDS do .env → TF_VAR_subnet_ids (array JSON)"
+fi
+
 # Export DB connection vars for Terraform (sobrescrevem tfvars)
 if [ -n "$AWS_REGION" ]; then
   export TF_VAR_aws_region="$AWS_REGION"
@@ -244,6 +256,38 @@ terraform validate
 [ $? -ne 0 ] && { fail "terraform validate falhou"; exit 2; }
 ok "validate concluído"
 
+# ---------------------------------------------------------------------------
+# STEP 5.5: Reutilizar segredo existente (se já existir com o mesmo nome)
+# ---------------------------------------------------------------------------
+section "STEP 5.5 — Secrets Manager (reuso de segredo existente)"
+if [ -n "${TF_VAR_db_secret_name:-}" ]; then
+  SECRET_ARN=""
+  SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$TF_VAR_db_secret_name" --region "$REGION" --query 'ARN' --output text 2>/dev/null || echo "")
+
+  if [ -n "$SECRET_ARN" ] && [ "$SECRET_ARN" != "None" ]; then
+    if terraform state list 2>/dev/null | grep -q "aws_secretsmanager_secret.create"; then
+      ok "Segredo '$TF_VAR_db_secret_name' já gerenciado pelo Terraform: $SECRET_ARN"
+    else
+      warn "Segredo '$TF_VAR_db_secret_name' já existe no AWS: $SECRET_ARN"
+      echo "   Importando para o estado do Terraform (o segredo NÃO será recriado)..."
+      # IMPORTANTE: terraform import também precisa das variáveis (tfvars + reais),
+      # senão o Terraform pede interativamente os valores obrigatórios.
+      # O provider AWS v6 importa aws_secretsmanager_secret pelo ARN (não pelo nome).
+      IMPORT_ARGS="-var-file=$TFVARS_FILE"
+      if [ -n "$DB_TEMP_TFVARS" ]; then
+        IMPORT_ARGS="$IMPORT_ARGS -var-file=$DB_TEMP_TFVARS"
+      fi
+      terraform import $IMPORT_ARGS -no-color "aws_secretsmanager_secret.create[0]" "$SECRET_ARN"
+      [ $? -ne 0 ] && { fail "Falha ao importar o segredo existente"; exit 2; }
+      ok "Segredo existente importado e será reutilizado"
+    fi
+  else
+    ok "Segredo '$TF_VAR_db_secret_name' não existe ainda; será criado pelo Terraform"
+  fi
+else
+  ok "DB_SECRET_NAME não definido; nenhum segredo será gerenciado"
+fi
+
 section "STEP 6 — terraform plan"
 if [ -n "$DB_TEMP_TFVARS" ]; then
   terraform plan -var-file="$TFVARS_FILE" -var-file="$DB_TEMP_TFVARS" -out=tfplan
@@ -301,6 +345,55 @@ print_output batch_job_definition_load_reference_name
 # ---------------------------------------------------------------------------
 # STEP 9: Build & Push Docker image to ECR
 # ---------------------------------------------------------------------------
+
+# Tenta abrir/iniciar o Docker instalado localmente (Docker Desktop ou systemd)
+# e aguarda o daemon ficar disponível.
+open_local_docker() {
+  local attempt=0
+  local max_attempts=60   # ~60 x 2s = até 2 minutos de espera
+
+  section "Abrindo Docker instalado localmente"
+
+  # 1) Linux com systemd (Ubuntu/Debian com docker engine)
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active docker >/dev/null 2>&1; then
+      ok "Docker já está ativo (systemd)"
+      return 0
+    fi
+    if sudo -n systemctl start docker 2>/dev/null || systemctl start docker 2>/dev/null; then
+      ok "Docker iniciado via systemctl"
+    else
+      warn "Falha ao iniciar via systemctl (talvez precise de sudo); tentando Docker Desktop"
+    fi
+  fi
+
+  # 2) macOS — Docker Desktop
+  if [ -d "/Applications/Docker.app" ] && command -v open >/dev/null 2>&1; then
+    open -a Docker 2>/dev/null && ok "Docker Desktop aberto (macOS)"
+  fi
+
+  # 3) Windows — Docker Desktop (Git Bash / MSYS / WSL)
+  if [ -f "/c/Program Files/Docker/Docker/Docker Desktop.exe" ]; then
+    ( cd /c && "/c/Program Files/Docker/Docker/Docker Desktop.exe" & ) 2>/dev/null
+    ok "Docker Desktop aberto (Windows)"
+  elif [ -n "$ProgramFiles" ] && [ -f "$ProgramFiles/Docker/Docker/Docker Desktop.exe" ]; then
+    ( cd /c && "$ProgramFiles/Docker/Docker/Docker Desktop.exe" & ) 2>/dev/null
+    ok "Docker Desktop aberto (Windows)"
+  fi
+
+  # Aguarda o daemon responder
+  while [ "$attempt" -lt "$max_attempts" ]; do
+    if docker info >/dev/null 2>&1; then
+      ok "Docker daemon pronto após ${attempt}s"
+      return 0
+    fi
+    attempt=$((attempt + 2))
+    sleep 2
+  done
+
+  return 1
+}
+
 if [ "$SKIP_APPLY" -eq 1 ] || [ "$SKIP_DOCKER" -eq 1 ]; then
   warn "Build/ push Docker ignorado."
 else
@@ -309,8 +402,16 @@ else
   if ! command -v docker >/dev/null 2>&1; then
     warn "Docker CLI não encontrado; pulando build/push. Instale o Docker para publicar a imagem."
   elif ! docker info >/dev/null 2>&1; then
-    warn "Docker daemon indisponível; pulando build/push. Inicie o daemon do Docker para publicar a imagem."
-  else
+    warn "Docker daemon indisponível; tentando abrir o Docker local..."
+    if open_local_docker; then
+      ok "Daemon do Docker disponível após reiniciar a aplicação"
+    else
+      warn "Docker daemon continua indisponível; pulando build/push."
+      echo "   Abra o Docker Desktop manualmente e rode o script novamente."
+    fi
+  fi
+
+  if docker info >/dev/null 2>&1; then
     ECR_REPO_URL=$(terraform output -raw ecr_repository_url 2>/dev/null)
     ECR_REPO_NAME=$(terraform output -raw ecr_repository_name 2>/dev/null)
 
@@ -390,6 +491,39 @@ if [ -n "$CE_NAME" ] && [ "$CE_NAME" != "None" ]; then
 else
   fail "Batch Compute Environment não encontrado"
   MISSING=1
+fi
+
+# Verify Secrets Manager secret and VPC endpoint
+section "10.3 — Secrets Manager"
+SECRET_NAME="${TF_VAR_db_secret_name:-}"
+if [ -n "$SECRET_NAME" ]; then
+  SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$SECRET_NAME" --region "$REGION" --query 'ARN' --output text 2>/dev/null || echo "")
+  if [ -n "$SECRET_ARN" ] && [ "$SECRET_ARN" != "None" ]; then
+    SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --region "$REGION" --query 'SecretString' --output text 2>/dev/null || echo "")
+    if [ -n "$SECRET_VALUE" ]; then
+      ok "Segredo '$SECRET_NAME' presente com valor: $SECRET_ARN"
+    else
+      fail "Segredo '$SECRET_NAME' existe mas está sem valor: $SECRET_ARN"
+      MISSING=1
+    fi
+  else
+    fail "Segredo '$SECRET_NAME' não encontrado no Secrets Manager"
+    MISSING=1
+  fi
+
+  EP_ID=$(aws ec2 describe-vpc-endpoints --region "$REGION" \
+    --filters "Name=service-name,Values=com.amazonaws.$REGION.secretsmanager" \
+    --query 'VpcEndpoints[0].VpcEndpointId' --output text 2>/dev/null || echo "")
+  if [ -n "$EP_ID" ] && [ "$EP_ID" != "None" ]; then
+    EP_DNS=$(aws ec2 describe-vpc-endpoints --region "$REGION" --vpc-endpoint-ids "$EP_ID" \
+      --query 'VpcEndpoints[0].DnsEntries[0].DnsName' --output text 2>/dev/null || echo "")
+    ok "VPC endpoint do Secrets Manager: $EP_ID (dns: $EP_DNS)"
+  else
+    fail "VPC endpoint do Secrets Manager não encontrado"
+    MISSING=1
+  fi
+else
+  ok "DB_SECRET_NAME não definido; nenhuma verificação de Secrets Manager"
 fi
 
 # ---------------------------------------------------------------------------

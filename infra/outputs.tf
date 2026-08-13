@@ -75,4 +75,33 @@ output "batch_security_group_id" {
   value       = aws_security_group.batch.id
 }
 
+# ============================================================================
+# Secrets Manager outputs
+# ============================================================================
+
+output "db_secret_name" {
+  description = "Nome do segredo no Secrets Manager (credenciais do banco)"
+  value       = local.secrets_enabled ? var.db_secret_name : null
+}
+
+output "db_secret_arn" {
+  description = "ARN do segredo no Secrets Manager"
+  value       = local.secret_arn
+}
+
+output "secretsmanager_vpc_endpoint_id" {
+  description = "ID do VPC interface endpoint do Secrets Manager (existente/reutilizado)"
+  value       = try(data.aws_vpc_endpoint.secretsmanager[0].id, null)
+}
+
+output "secretsmanager_vpc_endpoint_sg_id" {
+  description = "ID do Security Group do VPC endpoint do Secrets Manager"
+  value       = try(one(data.aws_vpc_endpoint.secretsmanager[0].security_group_ids), null)
+}
+
+output "secretsmanager_vpc_endpoint_dns" {
+  description = "DNS names do VPC endpoint do Secrets Manager"
+  value       = try([for d in data.aws_vpc_endpoint.secretsmanager[0].dns_entry : d.dns_name], [])
+}
+
 
